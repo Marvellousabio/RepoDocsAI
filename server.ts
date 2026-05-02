@@ -5,6 +5,9 @@ import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import axios from "axios";
 import { connectToDatabase } from "./database/index.js";
+
+// Global database connection status
+let isDatabaseConnected = false;
 import {
   createRepository,
   getRepositoryByFullName,
@@ -28,11 +31,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function startServer() {
-  // Connect to MongoDB first
-  await connectToDatabase();
+  const isProduction = process.env.NODE_ENV === 'production';
+  const PORT = process.env.PORT || 3000;
+
+  // Try to connect to MongoDB
+  isDatabaseConnected = await connectToDatabase();
+
+  if (!isDatabaseConnected && isProduction) {
+    console.log('🚨 Running in production without MongoDB - some features may not work');
+  }
 
   const app = express();
-  const PORT = 3000;
 
   // Security middleware
   app.use(securityHeaders);
@@ -40,7 +49,15 @@ async function startServer() {
 
   // API routes
   app.get("/api/health", (req: Request, res: Response) => {
-    res.json({ status: "ok", timestamp: new Date().toISOString() });
+    res.json({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      database: {
+        connected: isDatabaseConnected,
+        provider: isDatabaseConnected ? "mongodb" : "none"
+      },
+      environment: process.env.NODE_ENV || "development"
+    });
   });
 
   app.post("/api/analyze",
@@ -64,25 +81,31 @@ async function startServer() {
       const fullName = `${owner}/${repo.replace(".git", "")}`;
       const cleanRepo = repo.replace(".git", "");
 
-      // Check if repository already exists
-      const existingRepo = await getRepositoryByFullName(fullName);
-      if (existingRepo) {
-        return res.json({
-          metadata: {
-            name: existingRepo.name,
-            full_name: existingRepo.fullName,
-            description: existingRepo.description,
-            stars: existingRepo.stars,
-            forks: existingRepo.forks,
-            language: existingRepo.language,
-            owner: {
-              login: existingRepo.owner.login,
-              avatar_url: existingRepo.owner.avatarUrl,
-            }
-          },
-          fileTree: existingRepo.fileTree,
-          fromCache: true
-        });
+      // Check if repository already exists (only if DB is connected)
+      if (isDatabaseConnected) {
+        try {
+          const existingRepo = await getRepositoryByFullName(fullName);
+          if (existingRepo) {
+            return res.json({
+              metadata: {
+                name: existingRepo.name,
+                full_name: existingRepo.fullName,
+                description: existingRepo.description,
+                stars: existingRepo.stars,
+                forks: existingRepo.forks,
+                language: existingRepo.language,
+                owner: {
+                  login: existingRepo.owner.login,
+                  avatar_url: existingRepo.owner.avatarUrl,
+                }
+              },
+              fileTree: existingRepo.fileTree,
+              fromCache: true
+            });
+          }
+        } catch (dbError) {
+          console.log('Database operation failed, proceeding without caching');
+        }
       }
 
       // Fetch repo metadata
@@ -109,41 +132,47 @@ async function startServer() {
         downloadUrl: item.download_url
       }));
 
-      // Save to database
-      const repositoryData = {
-        githubId: repoData.id,
-        name: repoData.name,
-        fullName: repoData.full_name,
-        description: repoData.description,
-        url: repoData.url,
-        htmlUrl: repoData.html_url,
-        cloneUrl: repoData.clone_url,
-        language: repoData.language,
-        stars: repoData.stargazers_count,
-        forks: repoData.forks_count,
-        watchers: repoData.watchers_count,
-        size: repoData.size,
-        createdAt: new Date(repoData.created_at),
-        updatedAt: new Date(repoData.updated_at),
-        pushedAt: repoData.pushed_at ? new Date(repoData.pushed_at) : undefined,
-        owner: {
-          login: repoData.owner.login,
-          id: repoData.owner.id,
-          avatarUrl: repoData.owner.avatar_url,
-          htmlUrl: repoData.owner.html_url,
-          type: repoData.owner.type
-        },
-        topics: repoData.topics,
-        license: repoData.license ? {
-          key: repoData.license.key,
-          name: repoData.license.name,
-          spdxId: repoData.license.spdx_id,
-          url: repoData.license.url
-        } : undefined,
-        fileTree
-      };
+      // Save to database (only if connected)
+      if (isDatabaseConnected) {
+        try {
+          const repositoryData = {
+            githubId: repoData.id,
+            name: repoData.name,
+            fullName: repoData.full_name,
+            description: repoData.description,
+            url: repoData.url,
+            htmlUrl: repoData.html_url,
+            cloneUrl: repoData.clone_url,
+            language: repoData.language,
+            stars: repoData.stargazers_count,
+            forks: repoData.forks_count,
+            watchers: repoData.watchers_count,
+            size: repoData.size,
+            createdAt: new Date(repoData.created_at),
+            updatedAt: new Date(repoData.updated_at),
+            pushedAt: repoData.pushed_at ? new Date(repoData.pushed_at) : undefined,
+            owner: {
+              login: repoData.owner.login,
+              id: repoData.owner.id,
+              avatarUrl: repoData.owner.avatar_url,
+              htmlUrl: repoData.owner.html_url,
+              type: repoData.owner.type
+            },
+            topics: repoData.topics,
+            license: repoData.license ? {
+              key: repoData.license.key,
+              name: repoData.license.name,
+              spdxId: repoData.license.spdx_id,
+              url: repoData.license.url
+            } : undefined,
+            fileTree
+          };
 
-      await createRepository(repositoryData);
+          await createRepository(repositoryData);
+        } catch (dbError) {
+          console.log('Database save failed, continuing without persistence');
+        }
+      }
 
       res.json({
         metadata: {
@@ -168,10 +197,11 @@ async function startServer() {
   });
 
   // Get repositories with filtering and pagination
-  app.get("/api/repositories",
-    apiLimiter,
-    validateRepositoryQuery,
-    async (req: Request, res: Response) => {
+  app.get("/api/repositories", apiLimiter, validateRepositoryQuery, async (req: Request, res: Response) => {
+    if (!isDatabaseConnected) {
+      return res.status(503).json({ error: "Database not available" });
+    }
+
     try {
       const {
         owner,
@@ -207,6 +237,10 @@ async function startServer() {
 
   // Get popular repositories
   app.get("/api/repositories/popular", apiLimiter, async (req: Request, res: Response) => {
+    if (!isDatabaseConnected) {
+      return res.status(503).json({ error: "Database not available" });
+    }
+
     try {
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 10;
       const repositories = await getPopularRepositories(limit);
@@ -219,6 +253,10 @@ async function startServer() {
 
   // Get repository statistics
   app.get("/api/repositories/stats", apiLimiter, async (req: Request, res: Response) => {
+    if (!isDatabaseConnected) {
+      return res.status(503).json({ error: "Database not available" });
+    }
+
     try {
       const stats = await getRepositoryStats();
       res.json(stats);
@@ -230,6 +268,10 @@ async function startServer() {
 
   // Get specific repository by full name
   app.get("/api/repositories/:owner/:repo", apiLimiter, async (req: Request, res: Response) => {
+    if (!isDatabaseConnected) {
+      return res.status(503).json({ error: "Database not available" });
+    }
+
     try {
       const { owner, repo } = req.params;
       const fullName = `${owner}/${repo}`;

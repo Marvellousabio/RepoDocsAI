@@ -27,8 +27,11 @@ const connectionOptions: ConnectionOptions = {
 
 /**
  * Connect to MongoDB with retry logic
+ * In production, this will not throw errors - just log them
  */
-export async function connectToDatabase(): Promise<void> {
+export async function connectToDatabase(): Promise<boolean> {
+  const isProduction = process.env.NODE_ENV === 'production';
+
   try {
     // Connect to MongoDB
     await mongoose.connect(MONGODB_URI, connectionOptions);
@@ -53,9 +56,17 @@ export async function connectToDatabase(): Promise<void> {
       console.log('🔄 MongoDB reconnected');
     });
 
+    return true; // Connection successful
+
   } catch (error) {
     console.error('❌ Failed to connect to MongoDB:', error);
-    throw error;
+
+    if (isProduction) {
+      console.log('⚠️  Continuing without MongoDB in production mode');
+      return false; // Connection failed but don't throw
+    } else {
+      throw error; // In development, still throw for debugging
+    }
   }
 }
 
