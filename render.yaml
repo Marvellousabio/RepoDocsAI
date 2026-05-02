@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: repodocs-ai
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: GEMINI_API_KEY
+        sync: false  # Set in Render dashboard
+      - key: MONGODB_URI
+        sync: false  # Set in Render dashboard
