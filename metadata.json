@@ -1,0 +1,6 @@
+{
+  "name": "RepoDocs AI",
+  "description": "Deeply analyze GitHub repositories and generate production-ready READMEs using Gemini AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
