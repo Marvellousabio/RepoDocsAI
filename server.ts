@@ -1,19 +1,14 @@
 import express, { Request, Response } from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
-import fs from "fs";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import axios from "axios";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// Initialize Gemini
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
 async function startServer() {
   const app = express();
@@ -83,46 +78,6 @@ async function startServer() {
     } catch (error: any) {
       console.error("Analysis error:", error.response?.data || error.message);
       res.status(500).json({ error: "Failed to analyze repository. It might be private or invalid." });
-    }
-  });
-
-  app.post("/api/generate", async (req: Request, res: Response) => {
-    const { metadata, fileTree } = req.body;
-
-    if (!metadata || !fileTree) {
-      return res.status(400).json({ error: "Context data is required" });
-    }
-
-    try {
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
-
-      const prompt = `
-        You are a senior technical writer. Based on the following GitHub repository information, generate a high-quality, professional README.md.
-        
-        Repository Name: ${metadata.full_name}
-        Description: ${metadata.description || "No description provided"}
-        Primary Language: ${metadata.language || "Unknown"}
-        File Structure (Top Level):
-        ${JSON.stringify(fileTree, null, 2)}
-        
-        The README should include:
-        1. A catchy title and clear description.
-        2. Architecture & Folder Structure overview.
-        3. Installation & Usage guides.
-        4. Tech Stack (badges where applicable).
-        5. A "Health Score" section where you give the repo a score from 0-100 based on its complexity and structure.
-        
-        Format the output clearly in Markdown.
-      `;
-
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
-
-      res.json({ readme: text });
-    } catch (error: any) {
-      console.error("Generation error:", error.message);
-      res.status(500).json({ error: "Failed to generate README." });
     }
   });
 
