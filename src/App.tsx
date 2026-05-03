@@ -35,7 +35,16 @@ export default function App() {
         body: JSON.stringify({ repoUrl }),
       });
 
-      const analyzeData = await analyzeRes.json();
+      let analyzeData;
+      try {
+        analyzeData = await analyzeRes.json();
+      } catch (parseError) {
+        // If response is not JSON, get text to see what it is
+        const textResponse = await analyzeRes.text();
+        console.error('Non-JSON response:', textResponse.substring(0, 200));
+        throw new Error(`Server returned invalid response. Status: ${analyzeRes.status}`);
+      }
+
       if (!analyzeRes.ok) throw new Error(analyzeData.error);
 
       // Step 2: Generate via Frontend Gemini SDK
